@@ -24,6 +24,15 @@
         .stat-card.confirmed .num { color: #52c41a; }
         .stat-card.rejected .num { color: #ff4d4f; }
 
+        .threshold-card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+        .threshold-card h3 { color: #333; font-size: 14px; font-weight: 600; }
+        .threshold-card .current-value { font-size: 24px; font-weight: bold; color: #1890ff; margin-left: 8px; }
+        .threshold-card .desc { color: #666; font-size: 13px; }
+        .threshold-card input[type="number"] { width: 100px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        .threshold-card button { background: #1890ff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .threshold-card button:hover { background: #40a9ff; }
+        .threshold-card .hint { color: #999; font-size: 12px; margin-left: 10px; }
+
         .supported-types { background: white; padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; }
         .supported-types h3 { color: #333; font-size: 14px; margin-bottom: 12px; }
         .type-tags { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -103,6 +112,15 @@
             </div>
         </div>
 
+        <div class="threshold-card">
+            <h3>上报置信度阈值：</h3>
+            <span class="current-value" id="thresholdValue">-</span>
+            <span class="desc">低于此阈值不上报</span>
+            <input type="number" id="thresholdInput" min="0.05" max="0.99" step="0.05" placeholder="0.50">
+            <button onclick="updateThreshold()">设置</button>
+            <span class="hint">范围：0.05 - 0.99</span>
+        </div>
+
         <div class="supported-types">
             <h3>当前支持识别的问题类型：</h3>
             <div class="type-tags">
@@ -164,7 +182,7 @@
 
     <script>
         const API_BASE = '/api';
-        const PAGE_SIZE = 18;
+        const PAGE_SIZE = 16;
         let currentPage = 1;
         let currentItems = [];
         const selectedIds = new Set();
@@ -226,6 +244,36 @@
             document.getElementById('pendingCount').textContent = s.pending;
             document.getElementById('confirmedCount').textContent = s.confirmed;
             document.getElementById('rejectedCount').textContent = s.rejected;
+        }
+
+        async function loadThreshold() {
+            const res = await fetch(`${API_BASE}/config/threshold`, { cache: 'no-store' });
+            if (!res.ok) return;
+            const t = await res.json();
+            document.getElementById('thresholdValue').textContent = t.value.toFixed(2);
+            document.getElementById('thresholdInput').value = t.value.toFixed(2);
+        }
+
+        async function updateThreshold() {
+            const input = document.getElementById('thresholdInput');
+            const value = parseFloat(input.value);
+            if (isNaN(value) || value < 0.05 || value > 0.99) {
+                alert('请输入有效阈值（0.05 - 0.99）');
+                return;
+            }
+            const res = await fetch(`${API_BASE}/config/threshold`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value })
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                alert(data.detail || '设置失败');
+                return;
+            }
+            const t = await res.json();
+            document.getElementById('thresholdValue').textContent = t.value.toFixed(2);
+            alert('阈值已更新');
         }
 
         function getCurrentPageIds() {
@@ -307,6 +355,7 @@
                         </div>
                         <div class="card-type">${typeHtml}</div>
                         <div class="card-address" title="${addrTitle}">${addrHtml}</div>
+                        <div class="card-time" style="font-size:12px;color:#94a3b8;">${formatTime(item.create_time)}</div>
                         <div class="card-foot">
                             <div class="card-confidence"><span>置信度</span> ${(item.confidence * 100).toFixed(1)}%</div>
                             <div class="actions">
@@ -399,8 +448,16 @@
             return map[status] || status;
         }
 
+        function formatTime(timeStr) {
+            if (!timeStr) return '';
+            const d = new Date(timeStr);
+            const pad = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+
         loadData(1);
         loadStats();
+        loadThreshold();
     </script>
 </body>
 </html>

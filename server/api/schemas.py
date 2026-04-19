@@ -61,3 +61,12 @@ class ReportBatchDeleteRequest(BaseModel):
 class ReportDeleteOneRequest(BaseModel):
     """单条删除（POST，避免部分环境禁止 DELETE）"""
     id: int
+
+class ThresholdResponse(BaseModel):
+    """阈值配置响应"""
+    value: float
+    description: str
+
+class ThresholdUpdateRequest(BaseModel):
+    """阈值更新请求"""
+    value: float

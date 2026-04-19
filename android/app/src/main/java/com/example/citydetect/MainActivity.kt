@@ -34,6 +34,10 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.max
+import kotlin.math.sin
+import kotlin.math.cos
+import kotlin.math.atan2
+import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity() {
 
@@ -56,6 +60,17 @@ class MainActivity : AppCompatActivity() {
     private val reportMutex = Mutex()
     @Volatile private var reportInProgress = false
     private var lastSuccessfulLatLng: Pair<Double, Double>? = null
+
+    // 去重：记录最近上报的位置+类型
+    private data class ReportedItem(
+        val latitude: Double,
+        val longitude: Double,
+        val problemType: String,
+        val reportTime: Long
+    )
+    private val reportedItems = mutableListOf<ReportedItem>()
+    private val dedupDistanceMeters = 20.0  // 20米内视为同一位置
+    private val dedupTimeMinutes = 5L       // 5分钟内视为重复
 
     private val requiredPermissions = arrayOf(
         Manifest.permission.CAMERA,
@@ -124,6 +139,18 @@ class MainActivity : AppCompatActivity() {
                 Log.d("MainActivity", "检测器初始化完成，ready=$ready")
                 withContext(Dispatchers.Main) {
                     statusText.text = if (ready) "正在检测..." else "模型加载失败"
+                }
+
+                // 从服务器获取阈值
+                if (ready) {
+                    val threshold = reportApi.getThreshold()
+                    if (threshold != null) {
+                        configManager.reportConfidenceThreshold = threshold
+                        Log.d("MainActivity", "服务器阈值已应用: $threshold")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "阈值已同步: %.2f".format(threshold), Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("MainActivity", "检测器初始化失败: ${e.message}", e)
@@ -328,6 +355,43 @@ class MainActivity : AppCompatActivity() {
         return !reportInProgress && now - lastReportTime > reportInterval
     }
 
+    /**
+     * 计算两点之间的距离（米），使用 Haversine 公式
+     */
+    private fun distanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val earthRadius = 6371000.0  // 地球半径（米）
+        val lat1Rad = lat1 * Math.PI / 180.0
+        val lat2Rad = lat2 * Math.PI / 180.0
+        val dLat = (lat2 - lat1) * Math.PI / 180.0
+        val dLon = (lon2 - lon1) * Math.PI / 180.0
+        val a = sin(dLat / 2) * sin(dLat / 2) +
+                cos(lat1Rad) * cos(lat2Rad) *
+                sin(dLon / 2) * sin(dLon / 2)
+        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return earthRadius * c
+    }
+
+    /**
+     * 检查是否为重复上报（同一位置+同一类型）
+     */
+    private fun isDuplicateReport(latitude: Double, longitude: Double, problemType: String): Boolean {
+        val now = System.currentTimeMillis()
+        // 清理过期记录
+        reportedItems.removeAll { now - it.reportTime > dedupTimeMinutes * 60 * 1000 }
+        // 检查是否有相似记录
+        return reportedItems.any { item ->
+            val dist = distanceMeters(latitude, longitude, item.latitude, item.longitude)
+            dist < dedupDistanceMeters && item.problemType == problemType
+        }
+    }
+
+    /**
+     * 记录上报成功
+     */
+    private fun recordReport(latitude: Double, longitude: Double, problemType: String) {
+        reportedItems.add(ReportedItem(latitude, longitude, problemType, System.currentTimeMillis()))
+    }
+
     private fun reportDetection(bitmap: Bitmap, detections: List<Detection>) {
         CoroutineScope(Dispatchers.IO).launch {
             reportMutex.withLock {
@@ -363,6 +427,14 @@ class MainActivity : AppCompatActivity() {
 
                 Log.w("Report", "上报位置来源: $locationSource, lat=$latitude, lng=$longitude")
 
+                // 去重检查：同一位置同一类型不重复上报
+                val problemType = detections.first().label
+                if (isDuplicateReport(latitude, longitude, problemType)) {
+                    Log.d("Report", "去重：跳过重复上报 ($problemType @ $latitude, $longitude)")
+                    reportInProgress = false
+                    return@launch
+                }
+
                 // 获取地址信息
                 val address = if (locationSource == "FALLBACK_ZERO") {
                     "定位未就绪(0,0)，请检查GPS开关和定位权限"
@@ -390,7 +462,8 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     if (result) {
                         showReportSuccess()
-                        Log.d("Report", "上报成功")
+                        recordReport(latitude, longitude, problemType)
+                        Log.d("Report", "上报成功，已记录去重信息")
                     } else {
                         Toast.makeText(this@MainActivity, "上报失败，请检查服务器连接", Toast.LENGTH_SHORT).show()
                     }

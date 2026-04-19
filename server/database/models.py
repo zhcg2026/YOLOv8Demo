@@ -29,3 +29,11 @@ class Report(Base):
     reviewer = Column(String(50), comment="审核人")
     review_time = Column(DateTime, comment="审核时间")
     remark = Column(String(500), comment="备注")
+
+class SystemConfig(Base):
+    """系统配置表"""
+    __tablename__ = "system_config"
+
+    key = Column(String(50), primary_key=True, comment="配置键")
+    value = Column(String(200), nullable=False, comment="配置值")
+    description = Column(String(200), comment="配置说明")

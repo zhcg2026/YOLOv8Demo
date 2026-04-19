@@ -80,6 +80,35 @@ class ReportApi(private val configManager: ConfigManager) {
             }
         }
     }
+
+    suspend fun getThreshold(): Float? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val httpRequest = Request.Builder()
+                    .url("${getServerUrl()}/api/config/threshold")
+                    .get()
+                    .build()
+
+                val response = client.newCall(httpRequest).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string()
+                    if (body != null) {
+                        val thresholdResponse = gson.fromJson(body, ThresholdResponse::class.java)
+                        Log.d("ReportApi", "获取阈值成功: ${thresholdResponse.value}")
+                        thresholdResponse.value.toFloat()
+                    } else {
+                        null
+                    }
+                } else {
+                    Log.w("ReportApi", "获取阈值失败: ${response.code}")
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e("ReportApi", "获取阈值异常", e)
+                null
+            }
+        }
+    }
 }
 
 data class ReportRequest(
@@ -91,4 +120,9 @@ data class ReportRequest(
     val confidence: Double,
     val detect_time: String,
     val device_id: String
+)
+
+data class ThresholdResponse(
+    val value: Double,
+    val description: String
 )

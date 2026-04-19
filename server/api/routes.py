@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 
 from database import get_db
-from database.models import Report, ReportStatus
+from database.models import Report, ReportStatus, SystemConfig
 from api.schemas import (
     ReportCreate,
     ReportResponse,
@@ -17,6 +17,8 @@ from api.schemas import (
     ReportStatsResponse,
     ReportBatchDeleteRequest,
     ReportDeleteOneRequest,
+    ThresholdResponse,
+    ThresholdUpdateRequest,
 )
 
 router = APIRouter()
@@ -28,6 +30,16 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 @router.post("/reports", response_model=ReportResponse)
 async def create_report(report: ReportCreate, db: Session = Depends(get_db)):
     """接收上报数据"""
+    # 检查置信度阈值
+    threshold_config = db.query(SystemConfig).filter(SystemConfig.key == "confidence_threshold").first()
+    if threshold_config:
+        threshold = float(threshold_config.value)
+        if report.confidence < threshold:
+            raise HTTPException(
+                status_code=400,
+                detail=f"置信度 {report.confidence:.2f} 低于阈值 {threshold:.2f}，不予上报"
+            )
+
     # 保存图片
     image_data = base64.b64decode(report.image)
     image_filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{report.device_id}.jpg"
@@ -249,3 +261,38 @@ async def get_image(report_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="图片不存在")
 
     return FileResponse(report.image_path)
+
+@router.get("/config/threshold", response_model=ThresholdResponse)
+async def get_threshold(db: Session = Depends(get_db)):
+    """获取置信度阈值配置"""
+    config = db.query(SystemConfig).filter(SystemConfig.key == "confidence_threshold").first()
+    if not config:
+        # 如果不存在，返回默认值
+        return ThresholdResponse(value=0.5, description="上报置信度阈值，低于此值不上报")
+    return ThresholdResponse(
+        value=float(config.value),
+        description=config.description or ""
+    )
+
+@router.put("/config/threshold", response_model=ThresholdResponse)
+async def update_threshold(body: ThresholdUpdateRequest, db: Session = Depends(get_db)):
+    """更新置信度阈值配置"""
+    if body.value < 0.05 or body.value > 0.99:
+        raise HTTPException(status_code=400, detail="阈值必须在 0.05 到 0.99 之间")
+
+    config = db.query(SystemConfig).filter(SystemConfig.key == "confidence_threshold").first()
+    if not config:
+        config = SystemConfig(
+            key="confidence_threshold",
+            value=str(body.value),
+            description="上报置信度阈值，低于此值不上报"
+        )
+        db.add(config)
+    else:
+        config.value = str(body.value)
+    db.commit()
+
+    return ThresholdResponse(
+        value=float(config.value),
+        description=config.description or ""
+    )
