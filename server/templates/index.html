@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>城市管理智能识别 - 审核后台</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        h1 { color: #333; margin-bottom: 20px; }
+
+        .filters { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 12px 15px; align-items: center; }
+        .filters select, .filters button, .filters input[type="datetime-local"] { padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        .filters input[type="datetime-local"] { min-width: 180px; }
+        .filters button { background: #1890ff; color: white; border: none; cursor: pointer; }
+        .filters button:hover { background: #40a9ff; }
+
+        .stats { display: flex; gap: 20px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 20px; border-radius: 8px; flex: 1; text-align: center; }
+        .stat-card h3 { color: #666; font-size: 14px; margin-bottom: 10px; }
+        .stat-card .num { font-size: 32px; font-weight: bold; color: #1890ff; }
+        .stat-card.pending .num { color: #faad14; }
+        .stat-card.confirmed .num { color: #52c41a; }
+        .stat-card.rejected .num { color: #ff4d4f; }
+
+        .supported-types { background: white; padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; }
+        .supported-types h3 { color: #333; font-size: 14px; margin-bottom: 12px; }
+        .type-tags { display: flex; gap: 10px; flex-wrap: wrap; }
+        .type-tag { background: #e6f7ff; color: #1890ff; padding: 6px 16px; border-radius: 4px; font-size: 14px; border: 1px solid #91d5ff; }
+
+        .list { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06); }
+        .card-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 12px 16px; background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%); border-bottom: 1px solid #e2e8f0; }
+        .card-toolbar label { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: #475569; cursor: pointer; user-select: none; }
+        .card-toolbar .hint { font-size: 12px; color: #94a3b8; }
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; padding: 16px; min-height: 100px; }
+        @media (min-width: 1200px) {
+            .card-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+        }
+        .card-empty { grid-column: 1 / -1; text-align: center; padding: 48px 20px; color: #94a3b8; font-size: 15px; }
+        .report-card { border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; background: #fff; transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease; }
+        .report-card:hover { box-shadow: 0 10px 28px rgba(15, 23, 42, 0.1); transform: translateY(-2px); border-color: #cbd5e1; }
+        .report-card .card-top { position: relative; }
+        .report-card .card-check { position: absolute; top: 10px; left: 10px; z-index: 2; background: rgba(255, 255, 255, 0.92); border-radius: 8px; padding: 6px 8px; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12); }
+        .report-card .card-check input { cursor: pointer; width: 16px; height: 16px; }
+        .card-image-wrap { display: block; width: 100%; height: 200px; background: linear-gradient(135deg, #e2e8f0 0%, #f1f5f9 100%); overflow: hidden; cursor: pointer; }
+        .card-image-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.25s ease; }
+        .report-card:hover .card-image-wrap img { transform: scale(1.03); }
+        .card-body { padding: 12px 14px 14px; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+        .card-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+        .card-id { font-size: 12px; font-weight: 600; color: #64748b; font-variant-numeric: tabular-nums; }
+        .card-type { font-size: 15px; font-weight: 600; color: #1e293b; line-height: 1.35; }
+        .card-address { font-size: 12px; color: #64748b; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.6em; }
+        .card-foot { margin-top: auto; padding-top: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid #f1f5f9; }
+        .card-confidence { font-size: 13px; color: #0f172a; font-weight: 600; font-variant-numeric: tabular-nums; }
+        .card-confidence span { color: #64748b; font-weight: 500; font-size: 12px; }
+        .status-badge { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+        .status-badge.pending { background: #fff7ed; color: #c2410c; }
+        .status-badge.confirmed { background: #ecfdf5; color: #15803d; }
+        .status-badge.rejected { background: #fef2f2; color: #dc2626; }
+        .actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+        .actions button { padding: 5px 12px; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; transition: opacity 0.15s, transform 0.1s; }
+        .actions .confirm { background: #22c55e; color: white; }
+        .actions .reject { background: #ef4444; color: white; }
+        .actions .del { background: #64748b; color: white; }
+        .actions button:hover { opacity: 0.92; }
+        .actions button:active { transform: scale(0.98); }
+        .filters .btn-secondary { background: white; color: #333; border: 1px solid #d9d9d9; }
+        .filters .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .filters .btn-danger { background: #ff4d4f; }
+        .filters .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .pagination-row { padding: 16px 20px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px 24px; border-top: 1px solid #e2e8f0; background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%); }
+        .pagination-count { color: #666; font-size: 14px; }
+        .pagination-count strong { color: #333; font-weight: 600; }
+        .pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; }
+        .pagination button { padding: 8px 16px; margin: 0; border: 1px solid #ddd; background: white; cursor: pointer; border-radius: 4px; }
+        .pagination button.active { background: #1890ff; color: white; border-color: #1890ff; }
+
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; }
+        .modal.show { display: flex; justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 20px; border-radius: 8px; max-width: 90%; max-height: 90%; }
+        .modal-content img { max-width: 100%; max-height: 80vh; }
+        .modal-close { float: right; font-size: 24px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>城市管理智能识别 - 审核后台</h1>
+
+        <div class="stats">
+            <div class="stat-card pending">
+                <h3>待审核</h3>
+                <div class="num" id="pendingCount">0</div>
+            </div>
+            <div class="stat-card confirmed">
+                <h3>已确认</h3>
+                <div class="num" id="confirmedCount">0</div>
+            </div>
+            <div class="stat-card rejected">
+                <h3>已作废</h3>
+                <div class="num" id="rejectedCount">0</div>
+            </div>
+        </div>
+
+        <div class="supported-types">
+            <h3>当前支持识别的问题类型：</h3>
+            <div class="type-tags">
+                <span class="type-tag">单体垃圾</span>
+                <span class="type-tag">占道经营</span>
+            </div>
+        </div>
+
+        <div class="filters">
+            <label>状态：</label>
+            <select id="statusFilter">
+                <option value="">全部</option>
+                <option value="pending">待审核</option>
+                <option value="confirmed">已确认</option>
+                <option value="rejected">已作废</option>
+            </select>
+            <label>类型：</label>
+            <select id="typeFilter">
+                <option value="">全部</option>
+                <option value="单体垃圾">单体垃圾</option>
+                <option value="占道经营">占道经营</option>
+            </select>
+            <label>时间依据：</label>
+            <select id="timeFieldFilter" title="按哪个时间字段筛选时间段">
+                <option value="create">上报时间</option>
+                <option value="detect">检测时间</option>
+            </select>
+            <label>从</label>
+            <input type="datetime-local" id="startTime" step="60" title="起始时间">
+            <label>到</label>
+            <input type="datetime-local" id="endTime" step="60" title="结束时间">
+            <button type="button" class="btn-secondary" onclick="clearTimeRange()">清空时间</button>
+            <button type="button" onclick="loadData(1)">查询</button>
+            <button type="button" id="batchDeleteBtn" class="btn-danger" onclick="batchDelete()" disabled>批量删除</button>
+        </div>
+
+        <div class="list">
+            <div class="card-toolbar">
+                <label>
+                    <input type="checkbox" id="selectAll" title="全选本页" onchange="onSelectAll(this.checked)">
+                    全选本页
+                </label>
+                <span class="hint">点击图片可放大预览</span>
+            </div>
+            <div id="reportList" class="card-grid"></div>
+            <div class="pagination-row">
+                <div class="pagination-count" id="paginationCount">共 <strong>0</strong> 条</div>
+                <div class="pagination" id="pagination"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="imageModal" onclick="this.classList.remove('show')">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="document.getElementById('imageModal').classList.remove('show')" title="关闭">&times;</span>
+            <img id="modalImage" src="" alt="上报图片">
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        const PAGE_SIZE = 18;
+        let currentPage = 1;
+        let currentItems = [];
+        const selectedIds = new Set();
+
+        function formatDetail(detail) {
+            if (typeof detail === 'string') return detail;
+            if (Array.isArray(detail)) return detail.map((x) => x.msg || JSON.stringify(x)).join('；');
+            return '列表加载失败';
+        }
+
+        function clearTimeRange() {
+            document.getElementById('startTime').value = '';
+            document.getElementById('endTime').value = '';
+        }
+
+        async function loadData(page = 1) {
+            currentPage = page;
+            const status = document.getElementById('statusFilter').value;
+            const type = document.getElementById('typeFilter').value;
+            const timeField = document.getElementById('timeFieldFilter').value;
+            const startT = document.getElementById('startTime').value;
+            const endT = document.getElementById('endTime').value;
+
+            const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
+            if (status) params.append('status', status);
+            if (type) params.append('problem_type', type);
+            params.append('time_field', timeField);
+            if (startT) params.append('start_time', startT.length === 16 ? `${startT}:00` : startT);
+            if (endT) params.append('end_time', endT.length === 16 ? `${endT}:59` : endT);
+
+            const res = await fetch(`${API_BASE}/reports?${params}`, { cache: 'no-store' });
+            let data;
+            try {
+                data = await res.json();
+            } catch (e) {
+                alert('列表加载失败');
+                return;
+            }
+            if (!res.ok) {
+                alert(formatDetail(data.detail) || '列表加载失败');
+                return;
+            }
+            const totalPages = Math.max(1, Math.ceil((data.total || 0) / PAGE_SIZE));
+            if ((data.total || 0) > 0 && page > totalPages) {
+                return loadData(totalPages);
+            }
+
+            currentItems = data.items || [];
+            renderList(currentItems);
+            renderPagination(data.total || 0);
+            syncSelectAllCheckbox();
+            updateBatchDeleteButton();
+        }
+
+        async function loadStats() {
+            const res = await fetch(`${API_BASE}/report-stats`, { cache: 'no-store' });
+            if (!res.ok) return;
+            const s = await res.json();
+            document.getElementById('pendingCount').textContent = s.pending;
+            document.getElementById('confirmedCount').textContent = s.confirmed;
+            document.getElementById('rejectedCount').textContent = s.rejected;
+        }
+
+        function getCurrentPageIds() {
+            return currentItems.map((x) => x.id);
+        }
+
+        function onSelectAll(checked) {
+            const ids = getCurrentPageIds();
+            ids.forEach((id) => {
+                if (checked) selectedIds.add(id);
+                else selectedIds.delete(id);
+            });
+            document.querySelectorAll('.row-cb').forEach((cb) => {
+                cb.checked = checked;
+            });
+            updateBatchDeleteButton();
+        }
+
+        function onRowCheck(id, checked) {
+            if (checked) selectedIds.add(id);
+            else selectedIds.delete(id);
+            syncSelectAllCheckbox();
+            updateBatchDeleteButton();
+        }
+
+        function syncSelectAllCheckbox() {
+            const el = document.getElementById('selectAll');
+            if (!el) return;
+            const ids = getCurrentPageIds();
+            el.checked = ids.length > 0 && ids.every((id) => selectedIds.has(id));
+        }
+
+        function updateBatchDeleteButton() {
+            const btn = document.getElementById('batchDeleteBtn');
+            if (!btn) return;
+            const n = selectedIds.size;
+            btn.disabled = n === 0;
+            btn.textContent = n ? `批量删除 (${n})` : '批量删除';
+        }
+
+        function escapeHtml(s) {
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function escapeJsSingleQuoted(s) {
+            return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        }
+
+        function renderList(items) {
+            const el = document.getElementById('reportList');
+            if (!items.length) {
+                el.innerHTML = '<div class="card-empty">暂无数据，请调整筛选条件后重试</div>';
+                return;
+            }
+            el.innerHTML = items.map((item) => {
+                const addr = item.address || `${item.latitude.toFixed(4)}, ${item.longitude.toFixed(4)}`;
+                const imgUrlJs = escapeJsSingleQuoted(item.image_url);
+                const typeHtml = escapeHtml(item.problem_type);
+                const addrHtml = escapeHtml(addr);
+                const addrTitle = escapeHtml(addr);
+                return `
+                <article class="report-card">
+                    <div class="card-top">
+                        <div class="card-check">
+                            <input type="checkbox" class="row-cb" data-id="${item.id}" ${selectedIds.has(item.id) ? 'checked' : ''} onchange="onRowCheck(${item.id}, this.checked)">
+                        </div>
+                        <div class="card-image-wrap" role="button" tabindex="0" onclick="showImage('${imgUrlJs}')" onkeydown="if(event.key==='Enter')showImage('${imgUrlJs}')">
+                            <img src="${item.image_url}" alt="上报图 ${item.id}" loading="lazy">
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="card-meta">
+                            <span class="card-id">#${item.id}</span>
+                            <span class="status-badge ${item.status}">${getStatusText(item.status)}</span>
+                        </div>
+                        <div class="card-type">${typeHtml}</div>
+                        <div class="card-address" title="${addrTitle}">${addrHtml}</div>
+                        <div class="card-foot">
+                            <div class="card-confidence"><span>置信度</span> ${(item.confidence * 100).toFixed(1)}%</div>
+                            <div class="actions">
+                                ${item.status === 'pending' ? `
+                                    <button type="button" class="confirm" onclick="review(${item.id}, 'confirmed')">确认</button>
+                                    <button type="button" class="reject" onclick="review(${item.id}, 'rejected')">作废</button>
+                                ` : ''}
+                                <button type="button" class="del" onclick="deleteOne(${item.id})">删除</button>
+                            </div>
+                        </div>
+                    </div>
+                </article>`;
+            }).join('');
+        }
+
+        function renderPagination(total) {
+            const n = Math.max(0, Number(total) || 0);
+            const countEl = document.getElementById('paginationCount');
+            if (countEl) {
+                countEl.innerHTML = `共 <strong>${n}</strong> 条`;
+            }
+            const pages = Math.max(1, Math.ceil(n / PAGE_SIZE));
+            let html = '';
+            const maxButtons = 10;
+            const start = Math.max(1, Math.min(currentPage - 4, pages - maxButtons + 1));
+            const end = Math.min(pages, start + maxButtons - 1);
+            for (let i = start; i <= end; i++) {
+                html += `<button type="button" class="${i === currentPage ? 'active' : ''}" onclick="loadData(${i})">${i}</button>`;
+            }
+            document.getElementById('pagination').innerHTML = html;
+        }
+
+        async function review(id, status) {
+            const res = await fetch(`${API_BASE}/reports/${id}/review`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status, reviewer: '管理员' })
+            });
+            if (!res.ok) {
+                alert('审核失败');
+                return;
+            }
+            await loadData(currentPage);
+            await loadStats();
+        }
+
+        async function deleteOne(id) {
+            if (!confirm('确定删除该条记录？将同时移除图片文件。')) return;
+            const res = await fetch(`${API_BASE}/reports/remove-one`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id })
+            });
+            if (!res.ok) {
+                alert('删除失败');
+                return;
+            }
+            selectedIds.delete(id);
+            await loadData(currentPage);
+            await loadStats();
+        }
+
+        async function batchDelete() {
+            const ids = [...selectedIds];
+            if (!ids.length) return;
+            if (!confirm(`确定删除选中的 ${ids.length} 条记录？将同时移除对应图片文件。`)) return;
+            const res = await fetch(`${API_BASE}/reports/batch-remove`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids })
+            });
+            if (!res.ok) {
+                alert('批量删除失败');
+                return;
+            }
+            selectedIds.clear();
+            const sa = document.getElementById('selectAll');
+            if (sa) sa.checked = false;
+            await loadData(currentPage);
+            await loadStats();
+        }
+
+        function showImage(url) {
+            document.getElementById('modalImage').src = url;
+            document.getElementById('imageModal').classList.add('show');
+        }
+
+        function getStatusText(status) {
+            const map = { pending: '待审核', confirmed: '已确认', rejected: '已作废' };
+            return map[status] || status;
+        }
+
+        loadData(1);
+        loadStats();
+    </script>
+</body>
+</html>

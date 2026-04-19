@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+*.egg
+venv/
+.venv/
+env/
+
+# 模型文件（体积大，不上传）
+*.pt
+*.onnx
+*.pth
+*.weights
+
+# 上传文件目录
+server/uploads/
+
+# SQLite 数据库
+*.db
+*.sqlite
+*.sqlite3
+
+# Android
+android/.gradle/
+android/.idea/
+android/app/build/
+android/local.properties
+*.apk
+*.aab
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+.cache/
