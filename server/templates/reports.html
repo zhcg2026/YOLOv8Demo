@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>统计报表</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #1f2937; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .nav { background: white; padding: 12px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 10px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
+        .nav a { display: inline-block; padding: 8px 16px; background: #f0f0f0; color: #333; border-radius: 4px; text-decoration: none; }
+        .nav a:hover { background: #1890ff; color: white; }
+        .nav a.active { background: #1890ff; color: white; }
+        .toolbar { margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: white; padding: 15px; border-radius: 8px; }
+        .toolbar button { padding: 8px 16px; background: #1890ff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .toolbar button:hover { background: #40a9ff; }
+        .toolbar label { color: #333; font-size: 14px; }
+        .toolbar-left,
+        .toolbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .toolbar-note { font-size: 14px; color: #666; }
+        .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 0; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); border: 1px solid #eef2f7; }
+        .card h3 { color: #333; margin-bottom: 16px; border-bottom: 1px solid #eef2f7; padding-bottom: 8px; font-size: 18px; display: flex; align-items: center; justify-content: space-between; }
+        .card h3 .tag { display: inline-flex; align-items: center; font-size: 12px; color: #2563eb; background: #eff6ff; border: 1px solid #dbeafe; padding: 2px 8px; border-radius: 999px; font-weight: 500; }
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .stat-item { text-align: center; padding: 12px 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #edf2f7; }
+        .stat-item .label { font-size: 14px; color: #666; margin-bottom: 6px; }
+        .stat-item .value { font-size: 22px; font-weight: 700; color: #1890ff; line-height: 1.2; }
+        .stat-item.pending .value { color: #faad14; }
+        .stat-item.confirmed .value { color: #52c41a; }
+        .stat-item.rejected .value { color: #ff4d4f; }
+        .type-row { display: flex; align-items: center; padding: 6px 0; border-bottom: 1px dashed #eef2f7; }
+        .type-row:last-child { border-bottom: none; }
+        .type-row .name { flex: 1; color: #333; }
+        .type-row .count { font-weight: bold; color: #1890ff; }
+        .rank-item { display: flex; align-items: center; padding: 6px 0; border-bottom: 1px solid #eef2f7; }
+        .rank-item:last-child { border-bottom: none; }
+        .rank-item .rank { width: 30px; font-weight: bold; color: #666; }
+        .rank-item .name { flex: 1; color: #333; }
+        .rank-item .count { font-weight: bold; color: #1890ff; }
+        .track-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .track-stat { text-align: center; padding: 10px; background: #f0f5ff; border-radius: 8px; border: 1px solid #e4ecff; }
+        .track-stat .label { font-size: 14px; color: #666; }
+        .track-stat .value { font-size: 18px; font-weight: bold; color: #722ed1; }
+        #reportContent { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+        #reportContent .card:first-child { grid-column: 1 / -1; }
+        .date-select { display: flex; gap: 8px; align-items: center; }
+        .date-select select,
+        #granularitySelect,
+        #anchorDate {
+            min-width: 220px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            color: #333;
+            font-size: 14px;
+        }
+        #granularitySelect { min-width: 120px; }
+        #anchorDate { min-width: 180px; }
+        .empty-tip {
+            grid-column: 1 / -1;
+            background: #fff;
+            border: 1px dashed #d6deeb;
+            border-radius: 12px;
+            padding: 36px 16px;
+            text-align: center;
+            color: #94a3b8;
+        }
+        @media (max-width: 980px) {
+            #reportContent { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>统计报表</h1>
+        <div class="nav">
+            <a href="/">审核后台</a>
+            <a href="/users.html">用户管理</a>
+            <a href="/tracks.html">轨迹回放</a>
+            <a href="/reports.html" class="active">统计报表</a>
+        </div>
+
+        <div class="toolbar">
+            <div class="toolbar-left">
+                <button id="refreshBtn" onclick="loadReport()">刷新统计</button>
+                <span class="toolbar-note">按日/周/月实时统计上报与巡查数据</span>
+            </div>
+            <div class="toolbar-right">
+                <label for="granularitySelect">统计维度：</label>
+                <select id="granularitySelect" onchange="loadReport()">
+                    <option value="day">按日</option>
+                    <option value="week">按周</option>
+                    <option value="month">按月</option>
+                </select>
+                <label for="anchorDate">锚点日期：</label>
+                <input id="anchorDate" type="date" onchange="loadReport()">
+            </div>
+        </div>
+
+        <div id="reportContent"></div>
+    </div>
+
+    <script>
+        const token = localStorage.getItem('admin_token');
+        if (!token) {
+            window.location.href = '/login.html';
+        }
+
+        function todayStr() {
+            return new Date().toISOString().slice(0, 10);
+        }
+
+        async function loadReport() {
+            const granularity = document.getElementById('granularitySelect').value;
+            const anchorDate = document.getElementById('anchorDate').value || todayStr();
+            const params = new URLSearchParams({
+                granularity,
+                anchor_date: anchorDate
+            });
+            const res = await fetch(`/api/report-summary?${params.toString()}`, {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            if (!res.ok) {
+                if (res.status === 401 || res.status === 403) {
+                    window.location.href = '/login.html';
+                } else {
+                    document.getElementById('reportContent').innerHTML = '<div class="empty-tip">统计加载失败</div>';
+                }
+                return;
+            }
+            const data = await res.json();
+            renderReport(data.stats, data.period_label);
+        }
+
+        function renderReport(stats, periodLabel) {
+            const el = document.getElementById('reportContent');
+
+            el.innerHTML = `
+                <div class="card">
+                    <h3>
+                        <span>上报统计</span>
+                        <span class="tag">${periodLabel || stats.report_date}</span>
+                    </h3>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="label">上报总数</div>
+                            <div class="value">${stats.total_reports}</div>
+                        </div>
+                        <div class="stat-item pending">
+                            <div class="label">待审核</div>
+                            <div class="value">${stats.status_counts?.pending || 0}</div>
+                        </div>
+                        <div class="stat-item confirmed">
+                            <div class="label">已确认</div>
+                            <div class="value">${stats.status_counts?.confirmed || 0}</div>
+                        </div>
+                        <div class="stat-item rejected">
+                            <div class="label">已作废</div>
+                            <div class="value">${stats.status_counts?.rejected || 0}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>类型分布</h3>
+                    ${Object.entries(stats.type_counts || {}).map(([type, count]) =>
+                        `<div class="type-row">
+                            <span class="name">${type}</span>
+                            <span class="count">${count}</span>
+                        </div>`
+                    ).join('') || '<p style="color:#999;">暂无数据</p>'}
+                </div>
+
+                <div class="card">
+                    <h3>上报用户排行</h3>
+                    ${(stats.user_rank || []).map(([name, count], i) =>
+                        `<div class="rank-item">
+                            <span class="rank">${i + 1}</span>
+                            <span class="name">${name}</span>
+                            <span class="count">${count}</span>
+                        </div>`
+                    ).join('') || '<p style="color:#999;">暂无数据</p>'}
+                </div>
+
+                <div class="card">
+                    <h3>巡查统计</h3>
+                    <div class="track-stats">
+                        <div class="track-stat">
+                            <div class="label">巡查里程</div>
+                            <div class="value">${stats.track_stats?.total_distance_km || 0} km</div>
+                        </div>
+                        <div class="track-stat">
+                            <div class="label">巡查时长</div>
+                            <div class="value">${stats.track_stats?.total_duration_min || 0} 分钟</div>
+                        </div>
+                        <div class="track-stat">
+                            <div class="label">巡查次数</div>
+                            <div class="value">${stats.track_stats?.track_count || 0}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        document.getElementById('anchorDate').value = todayStr();
+        loadReport();
+    </script>
+</body>
+</html>

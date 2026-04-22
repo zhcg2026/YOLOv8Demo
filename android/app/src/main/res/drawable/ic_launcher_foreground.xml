@@ -4,15 +4,24 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <group android:scaleX="0.5"
-        android:scaleY="0.5"
-        android:translateX="27"
-        android:translateY="27">
-        <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M54,30L54,78L78,54L54,30z"/>
-        <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M30,54L54,78L54,30L30,54z"/>
-    </group>
+    <!-- 地图定位针主体 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,16C41.3,16 31,26.3 31,39c0,18.4 23,42.5 23,42.5S77,57.4 77,39C77,26.3 66.7,16 54,16z"/>
+    <path
+        android:fillColor="#1677FF"
+        android:pathData="M54,26m-8.5,0a8.5,8.5 0,1 1,17 0a8.5,8.5 0,1 1,-17 0"/>
+
+    <!-- 楼宇 -->
+    <path
+        android:fillColor="#0F4CBE"
+        android:pathData="M40,58h28v30h-28z"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M45,63h5v5h-5zM58,63h5v5h-5zM45,72h5v5h-5zM58,72h5v5h-5z"/>
+
+    <!-- 识别框 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,52h4v-6h6v-4h-10zM66,46h6v6h4v-10h-10zM32,66v10h10v-4h-6v-6zM72,66v6h-6v4h10v-10z"/>
 </vector>

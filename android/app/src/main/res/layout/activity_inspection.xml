@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".InspectionActivity">
+
+    <!-- 摄像头预览 -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- 检测结果绘制层 -->
+    <com.example.citydetect.DetectionOverlay
+        android:id="@+id/overlayView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- 速度提示条 -->
+    <LinearLayout
+        android:id="@+id/speedBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentTop="true"
+        android:layout_marginTop="16dp"
+        android:orientation="vertical"
+        android:gravity="center">
+
+        <TextView
+            android:id="@+id/speedText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="速度: 0.0 km/h"
+            android:textColor="@android:color/white"
+            android:textSize="16sp"
+            android:background="#80000000"
+            android:padding="8dp" />
+
+        <TextView
+            android:id="@+id/speedWarning"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="速度过快！请保持≤15km/h"
+            android:textColor="#ff0000"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:visibility="gone"
+            android:layout_marginTop="4dp" />
+
+    </LinearLayout>
+
+    <!-- 底部控制栏 -->
+    <LinearLayout
+        android:id="@+id/controlBar"
+        android:layout_width="match_parent"
+        android:layout_height="80dp"
+        android:layout_alignParentBottom="true"
+        android:background="#80000000"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:padding="16dp">
+
+        <!-- 状态显示 -->
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="正在检测..."
+            android:textColor="@android:color/white"
+            android:textSize="14sp" />
+
+        <!-- 位置显示 -->
+        <TextView
+            android:id="@+id/locationText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="获取位置中..."
+            android:textAlignment="textEnd"
+            android:textColor="@android:color/white"
+            android:textSize="12sp" />
+
+        <!-- 结束巡查按钮 -->
+        <Button
+            android:id="@+id/stopBtn"
+            android:layout_width="80dp"
+            android:layout_height="40dp"
+            android:text="结束"
+            android:textSize="14sp"
+            android:background="#ff4d4f"
+            android:textColor="@android:color/white"
+            android:layout_marginStart="16dp" />
+
+    </LinearLayout>
+
+    <!-- 上报成功提示 -->
+    <TextView
+        android:id="@+id/reportSuccess"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="80dp"
+        android:background="#8000FF00"
+        android:padding="16dp"
+        android:text="已上报"
+        android:textColor="@android:color/white"
+        android:textSize="18sp"
+        android:visibility="gone" />
+
+</RelativeLayout>

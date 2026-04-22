@@ -16,7 +16,7 @@ import kotlin.coroutines.resume
 
 class LocationHelper(
     private val context: Context,
-    private val onLocationUpdate: (Double, Double) -> Unit
+    private val onLocationUpdate: (Double, Double, Float) -> Unit  // lat, lng, speed(m/s)
 ) {
 
     private val fusedLocationClient: FusedLocationProviderClient =
@@ -26,6 +26,7 @@ class LocationHelper(
         context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
     private lateinit var locationCallback: LocationCallback
+    private var gpsLocationListener: LocationListener? = null
 
     private var currentLocation: Location? = null
     private var hasLocation = false
@@ -60,8 +61,9 @@ class LocationHelper(
                 if (location != null) {
                     currentLocation = location
                     hasLocation = true
-                    onLocationUpdate(location.latitude, location.longitude)
-                    Log.d("LocationHelper", "使用lastLocation: ${location.latitude}, ${location.longitude}")
+                    val speed = if (location.hasSpeed()) location.speed else 0f
+                    onLocationUpdate(location.latitude, location.longitude, speed)
+                    Log.d("LocationHelper", "使用lastLocation: ${location.latitude}, ${location.longitude}, speed=$speed")
                 } else {
                     Log.d("LocationHelper", "lastLocation为null，等待实时位置更新")
                 }
@@ -83,7 +85,6 @@ class LocationHelper(
             priority,
             2000L // 2秒更新一次
         ).setMinUpdateIntervalMillis(1000L)
-            // 室内/弱信号下 true 可能导致一直“等更准的位置”，表现为长期拿不到回调。
             .setWaitForAccurateLocation(false)
             .build()
 
@@ -92,8 +93,9 @@ class LocationHelper(
                 locationResult.lastLocation?.let { location ->
                     currentLocation = location
                     hasLocation = true
-                    onLocationUpdate(location.latitude, location.longitude)
-                    Log.d("LocationHelper", "实时位置更新: ${location.latitude}, ${location.longitude}, accuracy=${location.accuracy}")
+                    val speed = if (location.hasSpeed()) location.speed else 0f
+                    onLocationUpdate(location.latitude, location.longitude, speed)
+                    Log.d("LocationHelper", "实时位置更新: ${location.latitude}, ${location.longitude}, speed=$speed m/s")
                 }
             }
         }
@@ -108,6 +110,35 @@ class LocationHelper(
         } catch (e: Exception) {
             Log.e("LocationHelper", "定位请求失败", e)
         }
+
+        // 并行启用系统GPS持续定位，避免仅依赖Fused导致长时间坐标不变化
+        if (fineLocationGranted && gpsEnabled) {
+            try {
+                val listener = object : LocationListener {
+                    override fun onLocationChanged(location: Location) {
+                        currentLocation = location
+                        hasLocation = true
+                        val speed = if (location.hasSpeed()) location.speed else 0f
+                        onLocationUpdate(location.latitude, location.longitude, speed)
+                        Log.d(
+                            "LocationHelper",
+                            "GPS原生位置更新: ${location.latitude}, ${location.longitude}, speed=$speed m/s"
+                        )
+                    }
+                }
+                gpsLocationListener = listener
+                locationManager.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER,
+                    1000L,
+                    0.5f,
+                    listener,
+                    Looper.getMainLooper()
+                )
+                Log.d("LocationHelper", "GPS原生位置更新请求已发起")
+            } catch (e: Exception) {
+                Log.e("LocationHelper", "GPS原生定位请求失败", e)
+            }
+        }
     }
 
     fun hasLocation(): Boolean = hasLocation
@@ -116,11 +147,25 @@ class LocationHelper(
         if (::locationCallback.isInitialized) {
             fusedLocationClient.removeLocationUpdates(locationCallback)
         }
+        gpsLocationListener?.let { listener ->
+            runCatching { locationManager.removeUpdates(listener) }
+        }
+        gpsLocationListener = null
+    }
+
+    fun restartLocationUpdates(reason: String = "unknown") {
+        Log.w("LocationHelper", "重启定位订阅: reason=$reason")
+        stopLocationUpdates()
+        startLocationUpdates()
     }
 
     fun getCurrentLocation(): Location? {
         Log.d("LocationHelper", "getCurrentLocation: hasLocation=$hasLocation, location=$currentLocation")
         return currentLocation
+    }
+
+    fun getCurrentSpeed(): Float {
+        return currentLocation?.let { if (it.hasSpeed()) it.speed else 0f } ?: 0f
     }
 
     suspend fun getCurrentLocationFresh(): Location? = suspendCancellableCoroutine { continuation ->
@@ -155,12 +200,13 @@ class LocationHelper(
             if (location != null) {
                 currentLocation = location
                 hasLocation = true
-                onLocationUpdate(location.latitude, location.longitude)
+                val speed = if (location.hasSpeed()) location.speed else 0f
+                onLocationUpdate(location.latitude, location.longitude, speed)
             }
             continuation.resume(location)
         }
 
-        // 先尝试系统缓存（不依赖 GMS，可在无 Google 服务设备上工作）
+        // 先尝试系统缓存
         val lmLast = runCatching {
             val gps = if (gpsEnabled) locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) else null
             val net = if (netEnabled) locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) else null
@@ -180,7 +226,6 @@ class LocationHelper(
                         resumeOnce(location)
                     } else {
                         Log.w("LocationHelper", "getCurrentLocationFresh(Fused)返回null，尝试LocationManager单次定位")
-                        // Fused 返回 null 时，回退到 LocationManager 单次定位（GPS/NETWORK）
                         requestSingleUpdateFromLocationManager(
                             fineLocationGranted = fineLocationGranted,
                             gpsEnabled = gpsEnabled,
@@ -249,7 +294,6 @@ class LocationHelper(
         }, 2500L)
 
         try {
-            // requestSingleUpdate 在部分机型上不稳定，这里用 requestLocationUpdates + 立刻拿到一次就 remove
             locationManager.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
             Log.d("LocationHelper", "LocationManager单次定位已发起: provider=$provider")
         } catch (e: Exception) {

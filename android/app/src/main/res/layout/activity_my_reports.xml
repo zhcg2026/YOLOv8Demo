@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="#f5f7fa">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="我的上报"
+        android:textSize="20sp"
+        android:textColor="#333"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:id="@+id/emptyText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="暂无上报记录"
+        android:textSize="16sp"
+        android:textColor="#999"
+        android:visibility="gone"
+        android:layout_gravity="center" />
+
+    <ListView
+        android:id="@+id/reportsList"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:divider="#e0e0e0"
+        android:dividerHeight="1dp" />
+
+</LinearLayout>

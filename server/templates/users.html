@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用户管理</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .nav { background: white; padding: 12px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 10px; }
+        .nav a { display: inline-block; padding: 8px 16px; background: #f0f0f0; color: #333; border-radius: 4px; text-decoration: none; }
+        .nav a:hover { background: #1890ff; color: white; }
+        .nav a.active { background: #1890ff; color: white; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
+        .toolbar { margin-bottom: 16px; }
+        .toolbar button { padding: 8px 16px; background: #1890ff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; min-width: 900px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fa; color: #666; font-weight: 600; }
+        .role-admin { color: #1890ff; }
+        .role-collector { color: #52c41a; }
+        .actions button { padding: 4px 8px; margin-right: 4px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .actions .del { background: #ff4d4f; color: white; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100; justify-content: center; align-items: center; }
+        .modal.show { display: flex; }
+        .modal-content { background: white; padding: 24px; border-radius: 8px; width: 400px; }
+        .modal-content h3 { margin-bottom: 16px; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; margin-bottom: 4px; color: #333; font-size: 14px; }
+        .form-group input, .form-group select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .modal-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+        .modal-buttons button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; }
+        .modal-buttons .cancel { background: #f0f0f0; color: #333; }
+        .modal-buttons .save { background: #1890ff; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>用户管理</h1>
+        <div class="nav">
+            <a href="/">审核后台</a>
+            <a href="/users.html" class="active">用户管理</a>
+            <a href="/tracks.html">轨迹回放</a>
+            <a href="/reports.html">统计报表</a>
+        </div>
+
+        <div class="card">
+            <div class="toolbar">
+                <button onclick="showAddModal()">添加用户</button>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>用户名</th>
+                            <th>姓名</th>
+                            <th>角色</th>
+                            <th>电话</th>
+                            <th>创建时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="userList"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="addModal">
+        <div class="modal-content">
+            <h3>添加用户</h3>
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="newUsername" placeholder="用户名">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="newPassword" placeholder="密码">
+            </div>
+            <div class="form-group">
+                <label>姓名</label>
+                <input type="text" id="newName" placeholder="姓名">
+            </div>
+            <div class="form-group">
+                <label>角色</label>
+                <select id="newRole">
+                    <option value="collector">采集员</option>
+                    <option value="admin">管理员</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>电话</label>
+                <input type="text" id="newPhone" placeholder="电话">
+            </div>
+            <div class="modal-buttons">
+                <button class="cancel" onclick="hideAddModal()">取消</button>
+                <button class="save" onclick="addUser()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const token = localStorage.getItem('admin_token');
+        if (!token) {
+            window.location.href = '/login.html';
+        }
+
+        async function loadUsers() {
+            const res = await fetch('/api/users', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            if (!res.ok) {
+                if (res.status === 401 || res.status === 403) {
+                    window.location.href = '/login.html';
+                }
+                return;
+            }
+            const users = await res.json();
+            const tbody = document.getElementById('userList');
+            tbody.innerHTML = users.map(u => `
+                <tr>
+                    <td>${u.id}</td>
+                    <td>${u.username}</td>
+                    <td>${u.name || '-'}</td>
+                    <td class="role-${u.role}">${u.role === 'admin' ? '管理员' : '采集员'}</td>
+                    <td>${u.phone || '-'}</td>
+                    <td>${formatTime(u.create_time)}</td>
+                    <td class="actions">
+                        <button class="del" onclick="deleteUser(${u.id})">删除</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function formatTime(t) {
+            if (!t) return '-';
+            const d = new Date(t);
+            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        }
+
+        function showAddModal() {
+            document.getElementById('addModal').classList.add('show');
+        }
+
+        function hideAddModal() {
+            document.getElementById('addModal').classList.remove('show');
+        }
+
+        async function addUser() {
+            const username = document.getElementById('newUsername').value.trim();
+            const password = document.getElementById('newPassword').value.trim();
+            const name = document.getElementById('newName').value.trim();
+            const role = document.getElementById('newRole').value;
+            const phone = document.getElementById('newPhone').value.trim();
+
+            if (!username || !password) {
+                alert('请填写用户名和密码');
+                return;
+            }
+
+            const res = await fetch('/api/auth/register', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                },
+                body: JSON.stringify({ username, password, role, name, phone })
+            });
+
+            if (!res.ok) {
+                const data = await res.json();
+                alert(data.detail || '添加失败');
+                return;
+            }
+
+            hideAddModal();
+            loadUsers();
+            alert('添加成功');
+        }
+
+        async function deleteUser(id) {
+            if (!confirm('确定删除该用户？')) return;
+            const res = await fetch(`/api/users/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                alert(data.detail || '删除失败');
+                return;
+            }
+            loadUsers();
+            alert('删除成功');
+        }
+
+        loadUsers();
+    </script>
+</body>
+</html>

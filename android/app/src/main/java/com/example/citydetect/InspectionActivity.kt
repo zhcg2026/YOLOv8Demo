@@ -1,6 +1,7 @@
 package com.example.citydetect
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -15,12 +16,10 @@ import android.graphics.YuvImage
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
-import android.widget.EditText
-import android.widget.ImageButton
+import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -31,22 +30,26 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.ByteArrayOutputStream
+import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.max
+import kotlin.math.abs
 import kotlin.math.sin
 import kotlin.math.cos
 import kotlin.math.atan2
 import kotlin.math.sqrt
 
-class MainActivity : AppCompatActivity() {
+class InspectionActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var overlayView: DetectionOverlay
     private lateinit var statusText: TextView
     private lateinit var locationText: TextView
+    private lateinit var speedText: TextView
+    private lateinit var speedWarning: TextView
     private lateinit var reportSuccess: TextView
-    private lateinit var settingsBtn: ImageButton
+    private lateinit var stopBtn: Button
 
     private lateinit var cameraExecutor: ExecutorService
     private var detector: YOLOv8Detector? = null
@@ -54,14 +57,39 @@ class MainActivity : AppCompatActivity() {
     private lateinit var reportApi: ReportApi
     private lateinit var geocodingHelper: GeocodingHelper
     private lateinit var configManager: ConfigManager
+    private lateinit var trackRecorder: TrackRecorder
+    private lateinit var videoRecorder: VideoRecorder
 
     private var lastReportTime = 0L
-    private val reportInterval = 5000L // 5秒内不重复上报
+    private val reportInterval = 5000L
     private val reportMutex = Mutex()
     @Volatile private var reportInProgress = false
     private var lastSuccessfulLatLng: Pair<Double, Double>? = null
+    private var currentSpeedKmh = 0.0f
 
-    // 去重：记录最近上报的位置+类型
+    // 用于计算速度
+    private var prevSpeedLatLng: Pair<Double, Double>? = null
+    private var prevSpeedSampleTimeMs = 0L
+    private val speedWindow = ArrayDeque<Float>()
+    private val speedWindowSize = 5
+    private val maxValidSpeedKmh = 60.0f
+    private val minSpeedCalcDistanceMeters = 0.8
+    private val maxAcceptableAccuracyMeters = 120.0f
+    private var lastSmoothedSpeedKmh = 0f
+    private val speedEmaAlpha = 0.35f
+    private val maxSpeedDeltaPerUpdateKmh = 2.5f
+    private val maxStaleLocationAgeMs = 10_000L
+    private val invalidSpeedGracePeriodMs = 12_000L
+    private val maxInvalidSpeedSamplesInGrace = 8
+    private val invalidSpeedRecoveryTriggerSamples = 6
+    private val recoveryCooldownMs = 20_000L
+    private var lastRecoveryAttemptTimeMs = 0L
+    private var lastReliableSpeedKmh = 0f
+    private var lastReliableSpeedTimeMs = 0L
+    private var consecutiveInvalidSpeedSamples = 0
+    private var debugOverlayEnabled = false
+
+    // 去重记录
     private data class ReportedItem(
         val latitude: Double,
         val longitude: Double,
@@ -69,8 +97,8 @@ class MainActivity : AppCompatActivity() {
         val reportTime: Long
     )
     private val reportedItems = mutableListOf<ReportedItem>()
-    private val dedupDistanceMeters = 20.0  // 20米内视为同一位置
-    private val dedupTimeMinutes = 5L       // 5分钟内视为重复
+    private val dedupDistanceMeters = 20.0
+    private val dedupTimeMinutes = 5L
 
     private val requiredPermissions = arrayOf(
         Manifest.permission.CAMERA,
@@ -88,6 +116,7 @@ class MainActivity : AppCompatActivity() {
         if (cameraGranted && locationGranted) {
             startCamera()
             locationHelper.startLocationUpdates()
+            trackRecorder.startRecording()
         } else {
             Toast.makeText(this, "需要摄像头和定位权限", Toast.LENGTH_LONG).show()
             finish()
@@ -96,11 +125,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        // 作业场景保持常亮，避免检测过程中自动息屏。
+        setContentView(R.layout.activity_inspection)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        Log.d("MainActivity", "应用启动")
+        // 检查登录状态
+        if (!ConfigManager.getInstance(this).isLoggedIn()) {
+            val intent = Intent(this, LoginActivity::class.java)
+            startActivity(intent)
+            finish()
+            return
+        }
 
         // 初始化视图
         previewView = findViewById(R.id.previewView)
@@ -108,8 +142,19 @@ class MainActivity : AppCompatActivity() {
         overlayView = findViewById(R.id.overlayView)
         statusText = findViewById(R.id.statusText)
         locationText = findViewById(R.id.locationText)
+        speedText = findViewById(R.id.speedText)
+        speedWarning = findViewById(R.id.speedWarning)
         reportSuccess = findViewById(R.id.reportSuccess)
-        settingsBtn = findViewById(R.id.settingsBtn)
+        stopBtn = findViewById(R.id.stopBtn)
+        speedText.setOnLongClickListener {
+            debugOverlayEnabled = !debugOverlayEnabled
+            Toast.makeText(
+                this,
+                if (debugOverlayEnabled) "调试信息已开启" else "调试信息已关闭",
+                Toast.LENGTH_SHORT
+            ).show()
+            true
+        }
 
         // 初始化配置
         configManager = ConfigManager.getInstance(this)
@@ -119,24 +164,90 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor = Executors.newSingleThreadExecutor()
         locationHelper = LocationHelper(this) { lat, lng, speed ->
             runOnUiThread {
-                locationText.text = "位置: %.4f, %.4f".format(lat, lng)
-                Log.d("MainActivity", "UI位置更新: $lat, $lng")
+                val latestLocation = locationHelper.getCurrentLocation()
+                val provider = latestLocation?.provider ?: "unknown"
+                val baseLocationText = "位置: %.4f, %.4f".format(lat, lng)
+                val accuracy = latestLocation?.accuracy ?: Float.MAX_VALUE
+                val locationAgeMs = latestLocation?.let { now ->
+                    (System.currentTimeMillis() - now.time).coerceAtLeast(0L)
+                } ?: Long.MAX_VALUE
+                // 优先使用设备原生GPS速度字段（回调参数speed），避免hasSpeed判定过严导致长期显示0
+                val gpsSpeedKmh = if (accuracy <= maxAcceptableAccuracyMeters) {
+                    (speed * 3.6f).coerceAtLeast(0f)
+                } else {
+                    0f
+                }
+
+                val now = System.currentTimeMillis()
+                var calculatedSpeedKmh = 0.0f
+                if (prevSpeedLatLng != null && prevSpeedSampleTimeMs > 0L) {
+                    val timeDeltaMs = now - prevSpeedSampleTimeMs
+                    if (timeDeltaMs in 800L..30000L) {
+                        val (prevLat, prevLng) = prevSpeedLatLng!!
+                        val distMeters = distanceMeters(prevLat, prevLng, lat, lng)
+                        if (distMeters >= minSpeedCalcDistanceMeters) {
+                            val timeDeltaSec = timeDeltaMs / 1000.0f
+                            calculatedSpeedKmh = (distMeters / timeDeltaSec * 3.6f).toFloat()
+                        }
+                    }
+                }
+                prevSpeedLatLng = lat to lng
+                prevSpeedSampleTimeMs = now
+
+                val speedCandidate = when {
+                    gpsSpeedKmh in 0.5f..maxValidSpeedKmh -> gpsSpeedKmh
+                    calculatedSpeedKmh in 0.5f..maxValidSpeedKmh -> calculatedSpeedKmh
+                    else -> 0f
+                }
+                val effectiveSpeedCandidate = adaptInvalidSpeedSample(
+                    speedCandidate = speedCandidate,
+                    locationAgeMs = locationAgeMs,
+                    nowMs = now
+                )
+                currentSpeedKmh = smoothSpeed(effectiveSpeedCandidate)
+
+                speedText.text = "速度: %.1f km/h".format(currentSpeedKmh)
+
+                // 速度警告
+                if (currentSpeedKmh > 15.0f) {
+                    speedWarning.visibility = TextView.VISIBLE
+                    speedWarning.text = "速度过快！请保持≤15km/h"
+                    speedWarning.setTextColor(Color.RED)
+                } else {
+                    speedWarning.visibility = TextView.GONE
+                }
+
+                val trackAccuracy = latestLocation?.accuracy
+                val trackRecordStatus = trackRecorder.recordPoint(lat, lng, trackAccuracy)
+                if (debugOverlayEnabled) {
+                    val accuracyText = if (trackAccuracy == null) "N/A" else "%.1fm".format(trackAccuracy)
+                    locationText.text = "$baseLocationText\n调试: provider=$provider, acc=$accuracyText, track=$trackRecordStatus"
+                } else {
+                    locationText.text = baseLocationText
+                }
+
+                Log.d(
+                    "InspectionActivity",
+                    "速度: GPS=$gpsSpeedKmh, 计算=$calculatedSpeedKmh, 精度=$accuracy, 最终=$currentSpeedKmh km/h"
+                )
             }
             lastSuccessfulLatLng = lat to lng
         }
         reportApi = ReportApi(configManager)
+        trackRecorder = TrackRecorder(this, configManager)
+        videoRecorder = VideoRecorder(this)
 
-        // 设置按钮点击事件
-        settingsBtn.setOnClickListener {
-            showSettingsDialog()
+        // 结束巡查按钮
+        stopBtn.setOnClickListener {
+            finishInspection()
         }
 
-        // 延迟初始化检测器（避免阻塞主线程）
+        // 延迟初始化检测器
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                detector = YOLOv8Detector(this@MainActivity)
+                detector = YOLOv8Detector(this@InspectionActivity)
                 val ready = detector?.isReady() == true
-                Log.d("MainActivity", "检测器初始化完成，ready=$ready")
+                Log.d("InspectionActivity", "检测器初始化完成，ready=$ready")
                 withContext(Dispatchers.Main) {
                     statusText.text = if (ready) "正在检测..." else "模型加载失败"
                 }
@@ -146,14 +257,11 @@ class MainActivity : AppCompatActivity() {
                     val threshold = reportApi.getThreshold()
                     if (threshold != null) {
                         configManager.reportConfidenceThreshold = threshold
-                        Log.d("MainActivity", "服务器阈值已应用: $threshold")
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(this@MainActivity, "阈值已同步: %.2f".format(threshold), Toast.LENGTH_SHORT).show()
-                        }
+                        Log.d("InspectionActivity", "服务器阈值已应用: $threshold")
                     }
                 }
             } catch (e: Exception) {
-                Log.e("MainActivity", "检测器初始化失败: ${e.message}", e)
+                Log.e("InspectionActivity", "检测器初始化失败: ${e.message}", e)
                 withContext(Dispatchers.Main) {
                     statusText.text = "模型加载失败"
                 }
@@ -164,6 +272,7 @@ class MainActivity : AppCompatActivity() {
         if (checkPermissions()) {
             startCamera()
             locationHelper.startLocationUpdates()
+            trackRecorder.startRecording()
         } else {
             permissionLauncher.launch(requiredPermissions)
         }
@@ -190,14 +299,12 @@ class MainActivity : AppCompatActivity() {
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
 
-            // 预览
             val preview = Preview.Builder()
                 .build()
                 .also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            // 图像分析
             val imageAnalyzer = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
@@ -207,7 +314,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-            // 选择后置摄像头
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
@@ -224,9 +330,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun processImage(imageProxy: ImageProxy) {
         try {
-            // 转换为Bitmap
             val bitmap = imageProxyToBitmap(imageProxy)
             if (bitmap != null) {
+                // 记录帧到视频缓冲区
+                videoRecorder.recordFrame(bitmap)
+
                 val currentDetector = detector
                 if (currentDetector == null || !currentDetector.isReady()) {
                     val errorMsg = currentDetector?.getInitError() ?: "检测器初始化中"
@@ -236,11 +344,9 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
 
-                // 执行检测（展示阈值：影响画框）
                 val displayThreshold = configManager.displayConfidenceThreshold
                 val detections = currentDetector.detect(bitmap, displayThreshold)
 
-                // 在主线程更新 UI（将 Bitmap 坐标映射到与 PreviewView 默认 FILL_CENTER 一致的叠加层坐标）
                 runOnUiThread {
                     val forOverlay = mapDetectionsBitmapToOverlay(
                         detections,
@@ -249,7 +355,6 @@ class MainActivity : AppCompatActivity() {
                     )
                     overlayView.updateDetections(forOverlay)
 
-                    // 更新状态
                     val detectionInfo = if (detections.isNotEmpty()) {
                         "检测到 ${detections.size} 个目标"
                     } else {
@@ -258,7 +363,6 @@ class MainActivity : AppCompatActivity() {
                     statusText.text = detectionInfo
                 }
 
-                // 发现目标时上报
                 val reportThreshold = configManager.reportConfidenceThreshold
                 val forReport = detections.filter { it.confidence >= reportThreshold }
                 if (forReport.isNotEmpty() && shouldReport()) {
@@ -270,10 +374,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 检测框在「分析用 Bitmap」像素坐标系中；PreviewView 以等比放大填满屏幕（FILL_CENTER，可能裁切）。
-     * 叠加层与预览同尺寸时需做相同变换，否则框会与画面错位。
-     */
     private fun mapDetectionsBitmapToOverlay(
         detections: List<Detection>,
         bitmapWidth: Int,
@@ -355,11 +455,8 @@ class MainActivity : AppCompatActivity() {
         return !reportInProgress && now - lastReportTime > reportInterval
     }
 
-    /**
-     * 计算两点之间的距离（米），使用 Haversine 公式
-     */
     private fun distanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-        val earthRadius = 6371000.0  // 地球半径（米）
+        val earthRadius = 6371000.0
         val lat1Rad = lat1 * Math.PI / 180.0
         val lat2Rad = lat2 * Math.PI / 180.0
         val dLat = (lat2 - lat1) * Math.PI / 180.0
@@ -371,23 +468,15 @@ class MainActivity : AppCompatActivity() {
         return earthRadius * c
     }
 
-    /**
-     * 检查是否为重复上报（同一位置+同一类型）
-     */
     private fun isDuplicateReport(latitude: Double, longitude: Double, problemType: String): Boolean {
         val now = System.currentTimeMillis()
-        // 清理过期记录
         reportedItems.removeAll { now - it.reportTime > dedupTimeMinutes * 60 * 1000 }
-        // 检查是否有相似记录
         return reportedItems.any { item ->
             val dist = distanceMeters(latitude, longitude, item.latitude, item.longitude)
             dist < dedupDistanceMeters && item.problemType == problemType
         }
     }
 
-    /**
-     * 记录上报成功
-     */
     private fun recordReport(latitude: Double, longitude: Double, problemType: String) {
         reportedItems.add(ReportedItem(latitude, longitude, problemType, System.currentTimeMillis()))
     }
@@ -402,7 +491,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             try {
-                // 定位短重试 + 超时保护：避免定位接口卡住导致上报流程一直占用。
+                // 获取位置
                 var location = withTimeoutOrNull(2500L) {
                     locationHelper.getCurrentLocationFresh()
                 } ?: locationHelper.getCurrentLocation()
@@ -413,7 +502,7 @@ class MainActivity : AppCompatActivity() {
                     location = withTimeoutOrNull(2500L) {
                         locationHelper.getCurrentLocationFresh()
                     } ?: locationHelper.getCurrentLocation()
-                    Log.w("Report", "定位重试第${retryCount}次，结果=${if (location != null) "成功" else "失败"}")
+                    Log.w("Report", "定位重试第${retryCount}次")
                 }
 
                 val (latitude, longitude, locationSource) = if (location != null) {
@@ -421,40 +510,42 @@ class MainActivity : AppCompatActivity() {
                 } else if (lastSuccessfulLatLng != null) {
                     Triple(lastSuccessfulLatLng!!.first, lastSuccessfulLatLng!!.second, "LAST_KNOWN")
                 } else {
-                    // 极端情况下定位长期不可用时仍上报，先保证事件不丢失，再由后续定位链路优化。
                     Triple(0.0, 0.0, "FALLBACK_ZERO")
                 }
 
                 Log.w("Report", "上报位置来源: $locationSource, lat=$latitude, lng=$longitude")
 
-                // 去重检查：同一位置同一类型不重复上报
                 val problemType = detections.first().label
                 if (isDuplicateReport(latitude, longitude, problemType)) {
-                    Log.d("Report", "去重：跳过重复上报 ($problemType @ $latitude, $longitude)")
+                    Log.d("Report", "去重：跳过重复上报")
                     reportInProgress = false
                     return@launch
                 }
 
-                // 获取地址信息
                 val address = if (locationSource == "FALLBACK_ZERO") {
-                    "定位未就绪(0,0)，请检查GPS开关和定位权限"
+                    "定位未就绪(0,0)"
                 } else {
                     withTimeoutOrNull(4500L) {
                         geocodingHelper.getAddress(latitude, longitude)
                     } ?: String.format("纬度%.6f, 经度%.6f", latitude, longitude)
                 }
-                Log.d("Report", "地址(含兜底): $address")
 
                 lastReportTime = System.currentTimeMillis()
                 val annotated = drawDetectionsOnBitmap(bitmap, detections)
+
+                // 录制5秒视频
+                val videoBase64 = videoRecorder.captureAndFinish(annotated)
+
                 val result = reportApi.report(
                     image = annotated,
                     latitude = latitude,
                     longitude = longitude,
                     address = address,
                     problemType = detections.first().label,
-                    confidence = detections.first().confidence
+                    confidence = detections.first().confidence,
+                    videoBase64 = videoBase64
                 )
+
                 if (annotated != bitmap) {
                     annotated.recycle()
                 }
@@ -463,15 +554,15 @@ class MainActivity : AppCompatActivity() {
                     if (result) {
                         showReportSuccess()
                         recordReport(latitude, longitude, problemType)
-                        Log.d("Report", "上报成功，已记录去重信息")
+                        Log.d("Report", "上报成功")
                     } else {
-                        Toast.makeText(this@MainActivity, "上报失败，请检查服务器连接", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@InspectionActivity, "上报失败，请检查服务器连接", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
                 Log.e("Report", "上报失败", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "上报异常: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@InspectionActivity, "上报异常: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             } finally {
                 reportInProgress = false
@@ -529,38 +620,6 @@ class MainActivity : AppCompatActivity() {
         return out
     }
 
-    private fun showSettingsDialog() {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_settings, null)
-        val serverUrlInput = dialogView.findViewById<EditText>(R.id.serverUrlInput)
-        val displayConfInput = dialogView.findViewById<EditText>(R.id.displayConfInput)
-        val reportConfInput = dialogView.findViewById<EditText>(R.id.reportConfInput)
-        serverUrlInput.setText(configManager.serverUrl)
-        displayConfInput.setText(String.format("%.2f", configManager.displayConfidenceThreshold))
-        reportConfInput.setText(String.format("%.2f", configManager.reportConfidenceThreshold))
-
-        AlertDialog.Builder(this)
-            .setView(dialogView)
-            .setPositiveButton("保存") { _, _ ->
-                val newUrl = serverUrlInput.text.toString().trim()
-                if (newUrl.isNotEmpty()) {
-                    configManager.serverUrl = newUrl
-                    Toast.makeText(this, "服务器地址已更新", Toast.LENGTH_SHORT).show()
-                }
-
-                val displayConf = displayConfInput.text.toString().trim().toFloatOrNull()
-                if (displayConf != null) {
-                    configManager.displayConfidenceThreshold = displayConf
-                }
-
-                val reportConf = reportConfInput.text.toString().trim().toFloatOrNull()
-                if (reportConf != null) {
-                    configManager.reportConfidenceThreshold = reportConf
-                }
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
     private fun showReportSuccess() {
         reportSuccess.visibility = TextView.VISIBLE
         reportSuccess.postDelayed({
@@ -568,10 +627,114 @@ class MainActivity : AppCompatActivity() {
         }, 2000)
     }
 
+    private fun finishInspection() {
+        // 停止轨迹记录并上传
+        trackRecorder.stopAndUpload()
+
+        Toast.makeText(this, "巡查已结束", Toast.LENGTH_SHORT).show()
+        val intent = Intent(this, MainMenuActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        startActivity(intent)
+        finish()
+    }
+
+    private fun smoothSpeed(rawSpeed: Float): Float {
+        speedWindow.addLast(rawSpeed)
+        while (speedWindow.size > speedWindowSize) {
+            speedWindow.removeFirst()
+        }
+        if (speedWindow.isEmpty()) {
+            return 0f
+        }
+
+        // 先做中值滤波，抑制GPS瞬时毛刺
+        val nonZero = speedWindow.filter { it > 0.1f }.sorted()
+        val median = if (nonZero.isNotEmpty()) {
+            nonZero[nonZero.size / 2]
+        } else {
+            0f
+        }
+
+        // 再做EMA平滑，让速度变化更稳定
+        val ema = if (lastSmoothedSpeedKmh <= 0.1f) {
+            median
+        } else {
+            (lastSmoothedSpeedKmh * (1f - speedEmaAlpha)) + (median * speedEmaAlpha)
+        }
+
+        // 最后限制单次跳变，避免 10->4 这种肉眼抖动
+        val delta = ema - lastSmoothedSpeedKmh
+        val limited = if (abs(delta) > maxSpeedDeltaPerUpdateKmh) {
+            lastSmoothedSpeedKmh + (if (delta > 0) 1 else -1) * maxSpeedDeltaPerUpdateKmh
+        } else {
+            ema
+        }
+        lastSmoothedSpeedKmh = limited.coerceIn(0f, maxValidSpeedKmh)
+        return lastSmoothedSpeedKmh
+    }
+
+    private fun adaptInvalidSpeedSample(
+        speedCandidate: Float,
+        locationAgeMs: Long,
+        nowMs: Long
+    ): Float {
+        val isFreshLocation = locationAgeMs <= maxStaleLocationAgeMs
+        if (speedCandidate > 0.5f && isFreshLocation) {
+            lastReliableSpeedKmh = speedCandidate
+            lastReliableSpeedTimeMs = nowMs
+            consecutiveInvalidSpeedSamples = 0
+            return speedCandidate
+        }
+
+        consecutiveInvalidSpeedSamples += 1
+        val withinGrace = nowMs - lastReliableSpeedTimeMs <= invalidSpeedGracePeriodMs
+        val canFallback =
+            withinGrace &&
+                lastReliableSpeedKmh > 0.5f &&
+                consecutiveInvalidSpeedSamples <= maxInvalidSpeedSamplesInGrace
+
+        tryRecoverLocationStreamIfNeeded(
+            nowMs = nowMs,
+            locationAgeMs = locationAgeMs,
+            canFallback = canFallback
+        )
+
+        return if (canFallback) {
+            // 定位短时抖动或速度字段暂失时，短暂沿用最近可靠速度，避免显示值持续下坠到0
+            (lastReliableSpeedKmh * 0.98f).coerceAtLeast(0.5f)
+        } else {
+            0f
+        }
+    }
+
+    private fun tryRecoverLocationStreamIfNeeded(
+        nowMs: Long,
+        locationAgeMs: Long,
+        canFallback: Boolean
+    ) {
+        if (consecutiveInvalidSpeedSamples < invalidSpeedRecoveryTriggerSamples) {
+            return
+        }
+        if (canFallback) {
+            return
+        }
+        if (nowMs - lastRecoveryAttemptTimeMs < recoveryCooldownMs) {
+            return
+        }
+
+        lastRecoveryAttemptTimeMs = nowMs
+        val reason = "invalid_samples=$consecutiveInvalidSpeedSamples, location_age_ms=$locationAgeMs"
+        Log.w("InspectionActivity", "检测到定位速度链路异常，触发定位重启: $reason")
+        locationHelper.restartLocationUpdates(reason)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         cameraExecutor.shutdown()
         locationHelper.stopLocationUpdates()
+        trackRecorder.stop()
+        videoRecorder.stop()
     }
 }

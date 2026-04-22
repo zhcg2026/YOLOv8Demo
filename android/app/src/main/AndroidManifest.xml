@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <uses-feature android:name="android.hardware.camera" android:required="true" />
 
@@ -22,8 +23,9 @@
         android:usesCleartextTraffic="true"
         tools:targetApi="34">
 
+        <!-- 登录页（启动页） -->
         <activity
-            android:name=".MainActivity"
+            android:name=".LoginActivity"
             android:exported="true"
             android:theme="@style/Theme.CityDetect">
             <intent-filter>
@@ -31,6 +33,37 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 主菜单页 -->
+        <activity
+            android:name=".MainMenuActivity"
+            android:exported="false"
+            android:theme="@style/Theme.CityDetect" />
+
+        <!-- 巡查页 -->
+        <activity
+            android:name=".InspectionActivity"
+            android:exported="false"
+            android:theme="@style/Theme.CityDetect"
+            android:screenOrientation="portrait" />
+
+        <!-- 我的上报页 -->
+        <activity
+            android:name=".MyReportsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.CityDetect" />
+
+        <!-- 历史轨迹页 -->
+        <activity
+            android:name=".TrackHistoryActivity"
+            android:exported="false"
+            android:theme="@style/Theme.CityDetect" />
+
+        <!-- 原主页面（保留兼容） -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:theme="@style/Theme.CityDetect" />
 
     </application>
 

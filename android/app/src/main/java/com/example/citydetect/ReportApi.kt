@@ -31,6 +31,7 @@ class ReportApi(private val configManager: ConfigManager) {
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
 
     private fun getServerUrl(): String = configManager.serverUrl
+    private fun getAuthToken(): String = configManager.userToken
 
     suspend fun report(
         image: Bitmap,
@@ -38,7 +39,8 @@ class ReportApi(private val configManager: ConfigManager) {
         longitude: Double,
         address: String?,
         problemType: String,
-        confidence: Float
+        confidence: Float,
+        videoBase64: String? = null
     ): Boolean {
         return withContext(Dispatchers.IO) {
             try {
@@ -57,21 +59,23 @@ class ReportApi(private val configManager: ConfigManager) {
                     problem_type = problemType,
                     confidence = confidence.toDouble(),
                     detect_time = dateFormat.format(Date()),
-                    device_id = "Android-001"
+                    device_id = "Android-${configManager.userId}",
+                    video = videoBase64
                 )
 
                 val json = gson.toJson(request)
-                Log.d("ReportApi", "请求内容: $json")
+                Log.d("ReportApi", "请求内容大小: ${json.length}")
                 val body = json.toRequestBody("application/json".toMediaType())
 
-                // 发送请求
+                // 发送请求（携带认证Token）
                 val httpRequest = Request.Builder()
                     .url("${getServerUrl()}/api/reports")
+                    .header("Authorization", "Bearer ${getAuthToken()}")
                     .post(body)
                     .build()
 
                 val response = client.newCall(httpRequest).execute()
-                Log.d("ReportApi", "响应: ${response.code} - ${response.body?.string()}")
+                Log.d("ReportApi", "响应: ${response.code}")
                 response.isSuccessful
 
             } catch (e: Exception) {
@@ -86,6 +90,7 @@ class ReportApi(private val configManager: ConfigManager) {
             try {
                 val httpRequest = Request.Builder()
                     .url("${getServerUrl()}/api/config/threshold")
+                    .header("Authorization", "Bearer ${getAuthToken()}")
                     .get()
                     .build()
 
@@ -109,6 +114,34 @@ class ReportApi(private val configManager: ConfigManager) {
             }
         }
     }
+
+    suspend fun getMyReports(): List<ReportItem>? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val httpRequest = Request.Builder()
+                    .url("${getServerUrl()}/api/reports?user_id=${configManager.userId}&page=1&page_size=50")
+                    .header("Authorization", "Bearer ${getAuthToken()}")
+                    .get()
+                    .build()
+
+                val response = client.newCall(httpRequest).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string()
+                    if (body != null) {
+                        val listResponse = gson.fromJson(body, ReportListResponse::class.java)
+                        listResponse.items
+                    } else {
+                        null
+                    }
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e("ReportApi", "获取我的上报失败", e)
+                null
+            }
+        }
+    }
 }
 
 data class ReportRequest(
@@ -119,10 +152,29 @@ data class ReportRequest(
     val problem_type: String,
     val confidence: Double,
     val detect_time: String,
-    val device_id: String
+    val device_id: String,
+    val video: String?
 )
 
 data class ThresholdResponse(
     val value: Double,
     val description: String
+)
+
+data class ReportListResponse(
+    val total: Int,
+    val items: List<ReportItem>
+)
+
+data class ReportItem(
+    val id: Int,
+    val problem_type: String,
+    val confidence: Double,
+    val latitude: Double,
+    val longitude: Double,
+    val address: String?,
+    val status: String,
+    val create_time: String,
+    val image_url: String?,
+    val video_url: String?
 )
